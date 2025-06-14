@@ -1,0 +1,227 @@
+# GitHub Actions 工作流名称
+name: 自动编译并发布 fscan
+
+# 工作流触发器配置
+on:
+  # 允许手动触发
+  workflow_dispatch:
+  # 定时任务：每天北京时间下午4点（UTC时间上午8点）执行一次
+  schedule:
+    - cron: '0 8 * * *'
+
+# 环境变量，用于统一配置
+env:
+  # 上游fscan仓库
+  UPSTREAM_REPO: 'shadow1ng/fscan'
+  # 需要的Go版本
+  GO_VERSION: '1.24.4'
+
+# 工作流包含的任务
+jobs:
+  # 第一个任务：检查更新
+  check-for-updates:
+    # 任务名称
+    name: 1. 检查上游仓库是否有新版本
+    # 运行环境
+    runs-on: ubuntu-latest
+    # 输出，用于在不同任务间传递数据
+    outputs:
+      # 是否需要运行编译任务
+      should_run: ${{ steps.compare_tags.outputs.should_run }}
+      # 获取到的上游新版本号
+      new_tag: ${{ steps.get_upstream_tag.outputs.tag }}
+
+    steps:
+      # 步骤1：获取上游fscan仓库的最新tag
+      - name: 获取上游最新 Tag
+        id: get_upstream_tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # 使用 GitHub CLI 获取最新的 release tag
+          # -R 指定仓库, --limit 1 只获取一个, --json tagName 只返回tag字段, -q '.[0].tagName' 提取纯文本tag
+          LATEST_TAG=$(gh release list -R ${{ env.UPSTREAM_REPO }} --limit 1 --json tagName -q '.[0].tagName')
+          echo "上游最新 Tag: $LATEST_TAG"
+          # 将tag设置为步骤的输出
+          echo "tag=$LATEST_TAG" >> $GITHUB_OUTPUT
+
+      # 步骤2：获取当前仓库的最新tag
+      - name: 获取本仓库最新 Release Tag
+        id: get_current_tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # 使用 || echo "0.0.0" 来处理首次运行，仓库还没有任何release的情况
+          CURRENT_TAG=$(gh release list --limit 1 --json tagName -q '.[0].tagName' || echo "0.0.0")
+          echo "本仓库最新 Tag: $CURRENT_TAG"
+          echo "tag=$CURRENT_TAG" >> $GITHUB_OUTPUT
+
+      # 步骤3：对比tag，判断是否需要继续执行
+      - name: 对比 Tag 并设置输出
+        id: compare_tags
+        run: |
+          # 从前面步骤获取输出
+          UPSTREAM_TAG="${{ steps.get_upstream_tag.outputs.tag }}"
+          CURRENT_TAG="${{ steps.get_current_tag.outputs.tag }}"
+          
+          # 如果两个tag不相等，说明有新版本
+          if [[ "$UPSTREAM_TAG" != "$CURRENT_TAG" ]]; then
+            echo "发现新版本: $UPSTREAM_TAG，准备开始编译。"
+            echo "should_run=true" >> $GITHUB_OUTPUT
+          else
+            echo "当前版本 ($CURRENT_TAG) 已是最新，无需编译。"
+            echo "should_run=false" >> $GITHUB_OUTPUT
+          fi
+
+  # 第二个任务：编译
+  build:
+    # 任务名称
+    name: 2. 编译并压缩程序
+    # 依赖于 check-for-updates 任务
+    needs: check-for-updates
+    # 仅当 check-for-updates 任务的输出 should_run 为 'true' 时才运行
+    if: needs.check-for-updates.outputs.should_run == 'true'
+    
+    # 编译矩阵策略
+    strategy:
+      # 当一个构建失败时，不取消其他构建
+      fail-fast: false
+      matrix:
+        # 定义不同平台的组合
+        # os: GitHub Actions运行器环境
+        # goos: Go语言的目标操作系统
+        # goarch: Go语言的目标CPU架构
+        include:
+          - os: ubuntu-latest
+            goos: linux
+            goarch: amd64
+          - os: ubuntu-latest
+            goos: linux
+            goarch: arm64
+          - os: windows-latest
+            goos: windows
+            goarch: amd64
+          - os: windows-latest
+            goos: windows
+            goarch: arm64
+          - os: macos-latest
+            goos: darwin
+            goarch: amd64
+          - os: macos-latest
+            goos: darwin
+            goarch: arm64
+
+    # 在指定的运行器上执行
+    runs-on: ${{ matrix.os }}
+    
+    steps:
+      # 步骤1：安装Go语言环境
+      - name: 安装 Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      # 步骤2：根据不同操作系统安装UPX压缩工具
+      - name: 安装 UPX
+        run: |
+          if [ "${{ runner.os }}" == "Linux" ]; then
+            sudo apt-get update && sudo apt-get install -y upx-ucl
+          elif [ "${{ runner.os }}" == "Windows" ]; then
+            choco install upx
+          elif [ "${{ runner.os }}" == "macOS" ]; then
+            brew install upx
+          fi
+
+      # 步骤3：拉取上游fscan的源代码
+      - name: 拉取上游仓库代码
+        uses: actions/checkout@v4
+        with:
+          # 指定要拉取的仓库
+          repository: ${{ env.UPSTREAM_REPO }}
+          # 指定要拉取的版本号（tag）
+          ref: ${{ needs.check-for-updates.outputs.new_tag }}
+
+      # 步骤4：编译fscan
+      - name: 编译 fscan
+        id: build
+        env:
+          # 设置Go交叉编译所需的环境变量
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          # 定义输出文件名，Windows平台需要加.exe后缀
+          BINARY_NAME="fscan_${{ matrix.goos }}_${{ matrix.goarch }}"
+          if [ "$GOOS" == "windows" ]; then
+            BINARY_NAME+=".exe"
+          fi
+          
+          echo "开始编译: $BINARY_NAME"
+          # 编译命令
+          go build -ldflags="-s -w" -trimpath -o $BINARY_NAME main.go
+          echo "编译完成."
+          
+          # 压缩编译好的文件
+          echo "开始压缩..."
+          upx -9 $BINARY_NAME
+          echo "压缩完成."
+
+          # 将文件名设置为步骤输出，方便后续步骤引用
+          echo "binary_name=$BINARY_NAME" >> $GITHUB_OUTPUT
+
+      # 步骤5：上传编译好的文件作为构建产物
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          # 产物名称，唯一即可
+          name: fscan-bin-${{ matrix.goos }}-${{ matrix.goarch }}
+          # 需要上传的文件路径
+          path: ${{ steps.build.outputs.binary_name }}
+          # 产物保留天数
+          retention-days: 1
+  
+  # 第三个任务：创建Release并上传文件
+  release:
+    # 任务名称
+    name: 3. 创建 Release 并上传附件
+    # 依赖于 build 任务
+    needs: [check-for-updates, build]
+    # 仅当需要更新时才运行
+    if: needs.check-for-updates.outputs.should_run == 'true'
+    # 运行环境
+    runs-on: ubuntu-latest
+
+    # 权限配置，需要写入release的权限
+    permissions:
+      contents: write
+
+    steps:
+      # 步骤1：创建用于存放产物的目录
+      - name: 创建下载目录
+        run: mkdir -p artifacts
+
+      # 步骤2：下载所有构建产物
+      - name: 下载所有构建产物
+        uses: actions/download-artifact@v4
+        with:
+          # 下载到指定目录
+          path: artifacts
+
+      # 步骤3：创建GitHub Release并上传所有文件
+      - name: 创建 Release 并上传
+        env:
+          # 使用 secrets.GITHUB_TOKEN 进行认证
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # 切换到产物目录
+          cd artifacts
+          
+          # 使用 GitHub CLI 创建 Release
+          # ${{ needs.check-for-updates.outputs.new_tag }} 是新的版本号
+          # --title 设置 Release 标题
+          # --notes 设置 Release 的描述
+          # `find . -type f -print` 会找到所有下载下来的文件并作为参数，一次性全部上传
+          gh release create ${{ needs.check-for-updates.outputs.new_tag }} \
+            --title "fscan ${{ needs.check-for-updates.outputs.new_tag }}" \
+            --notes "由 GitHub Actions 自动编译发布。上游仓库: https://github.com/${{ env.UPSTREAM_REPO }}" \
+            $(find . -type f -print)
+
