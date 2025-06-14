@@ -14,7 +14,7 @@ env:
   # 上游fscan仓库
   UPSTREAM_REPO: 'shadow1ng/fscan'
   # 需要的Go版本
-  GO_VERSION: '1.24.4'
+  GO_VERSION: '1.24'
 
 # 工作流包含的任务
 jobs:
@@ -32,16 +32,13 @@ jobs:
       new_tag: ${{ steps.get_upstream_tag.outputs.tag }}
 
     steps:
-      # 步骤1：获取上游fscan仓库的最新tag
-      - name: 获取上游最新 Tag
+      # 步骤1：获取上游fscan仓库的最新Git Tag
+      - name: 获取上游最新 Git Tag
         id: get_upstream_tag
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # 使用 GitHub CLI 获取最新的 release tag
-          # -R 指定仓库, --limit 1 只获取一个, --json tagName 只返回tag字段, -q '.[0].tagName' 提取纯文本tag
-          LATEST_TAG=$(gh release list -R ${{ env.UPSTREAM_REPO }} --limit 1 --json tagName -q '.[0].tagName')
-          echo "上游最新 Tag: $LATEST_TAG"
+          # 使用 git ls-remote 获取所有tags，并按版本号排序，取最新的一个
+          LATEST_TAG=$(git ls-remote --tags --sort="-v:refname" https://github.com/${{ env.UPSTREAM_REPO }}.git | head -n 1 | sed 's/.*\///')
+          echo "上游最新 Git Tag: $LATEST_TAG"
           # 将tag设置为步骤的输出
           echo "tag=$LATEST_TAG" >> $GITHUB_OUTPUT
 
@@ -81,6 +78,8 @@ jobs:
     needs: check-for-updates
     # 仅当 check-for-updates 任务的输出 should_run 为 'true' 时才运行
     if: needs.check-for-updates.outputs.should_run == 'true'
+    # 统一使用 Ubuntu 环境进行交叉编译
+    runs-on: ubuntu-latest
     
     # 编译矩阵策略
     strategy:
@@ -88,31 +87,19 @@ jobs:
       fail-fast: false
       matrix:
         # 定义不同平台的组合
-        # os: GitHub Actions运行器环境
-        # goos: Go语言的目标操作系统
-        # goarch: Go语言的目标CPU架构
         include:
-          - os: ubuntu-latest
-            goos: linux
+          - goos: linux
             goarch: amd64
-          - os: ubuntu-latest
-            goos: linux
+          - goos: linux
             goarch: arm64
-          - os: windows-latest
-            goos: windows
+          - goos: windows
             goarch: amd64
-          - os: windows-latest
-            goos: windows
+          - goos: windows
             goarch: arm64
-          - os: macos-latest
-            goos: darwin
+          - goos: darwin
             goarch: amd64
-          - os: macos-latest
-            goos: darwin
+          - goos: darwin
             goarch: arm64
-
-    # 在指定的运行器上执行
-    runs-on: ${{ matrix.os }}
     
     steps:
       # 步骤1：安装Go语言环境
@@ -121,16 +108,10 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
 
-      # 步骤2：根据不同操作系统安装UPX压缩工具
+      # 步骤2：安装UPX压缩工具（Ubuntu环境）
       - name: 安装 UPX
         run: |
-          if [ "${{ runner.os }}" == "Linux" ]; then
-            sudo apt-get update && sudo apt-get install -y upx-ucl
-          elif [ "${{ runner.os }}" == "Windows" ]; then
-            choco install upx
-          elif [ "${{ runner.os }}" == "macOS" ]; then
-            brew install upx
-          fi
+          sudo apt-get update && sudo apt-get install -y upx-ucl
 
       # 步骤3：拉取上游fscan的源代码
       - name: 拉取上游仓库代码
@@ -151,11 +132,11 @@ jobs:
         run: |
           # 定义输出文件名，Windows平台需要加.exe后缀
           BINARY_NAME="fscan_${{ matrix.goos }}_${{ matrix.goarch }}"
-          if [ "$GOOS" == "windows" ]; then
+          if [ "${{ matrix.goos }}" == "windows" ]; then
             BINARY_NAME+=".exe"
           fi
           
-          echo "开始编译: $BINARY_NAME"
+          echo "开始编译: $BINARY_NAME (GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }})"
           # 编译命令
           go build -ldflags="-s -w" -trimpath -o $BINARY_NAME main.go
           echo "编译完成."
@@ -224,4 +205,3 @@ jobs:
             --title "fscan ${{ needs.check-for-updates.outputs.new_tag }}" \
             --notes "由 GitHub Actions 自动编译发布。上游仓库: https://github.com/${{ env.UPSTREAM_REPO }}" \
             $(find . -type f -print)
-
