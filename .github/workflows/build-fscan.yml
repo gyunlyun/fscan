@@ -182,18 +182,22 @@ jobs:
       contents: write
 
     steps:
-      # 步骤1：创建用于存放产物的目录
+      # 步骤1：检出代码仓库
+      - name: 检出代码仓库
+        uses: actions/checkout@v4
+
+      # 步骤2：创建用于存放产物的目录
       - name: 创建下载目录
         run: mkdir -p artifacts
 
-      # 步骤2：下载所有构建产物
+      # 步骤3：下载所有构建产物
       - name: 下载所有构建产物
         uses: actions/download-artifact@v4
         with:
           # 下载到指定目录
           path: artifacts
 
-      # 步骤3：创建GitHub Release并上传所有文件
+      # 步骤4：创建GitHub Release并上传所有文件
       - name: 创建 Release 并上传
         env:
           # 使用 secrets.GITHUB_TOKEN 进行认证
