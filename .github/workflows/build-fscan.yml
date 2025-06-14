@@ -107,6 +107,7 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
+          cache: false
 
       # 步骤2：安装UPX压缩工具（Ubuntu环境）
       - name: 安装 UPX
