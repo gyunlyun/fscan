@@ -32,7 +32,11 @@ jobs:
       new_tag: ${{ steps.get_upstream_tag.outputs.tag }}
 
     steps:
-      # 步骤1：获取上游fscan仓库的最新Git Tag
+      # 步骤1：检出代码仓库
+      - name: 检出代码仓库
+        uses: actions/checkout@v4
+
+      # 步骤2：获取上游fscan仓库的最新Git Tag
       - name: 获取上游最新 Git Tag
         id: get_upstream_tag
         run: |
@@ -42,7 +46,7 @@ jobs:
           # 将tag设置为步骤的输出
           echo "tag=$LATEST_TAG" >> $GITHUB_OUTPUT
 
-      # 步骤2：获取当前仓库的最新tag
+      # 步骤3：获取当前仓库的最新tag
       - name: 获取本仓库最新 Release Tag
         id: get_current_tag
         env:
@@ -53,7 +57,7 @@ jobs:
           echo "本仓库最新 Tag: $CURRENT_TAG"
           echo "tag=$CURRENT_TAG" >> $GITHUB_OUTPUT
 
-      # 步骤3：对比tag，判断是否需要继续执行
+      # 步骤4：对比tag，判断是否需要继续执行
       - name: 对比 Tag 并设置输出
         id: compare_tags
         run: |
