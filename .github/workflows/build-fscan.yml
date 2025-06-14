@@ -141,10 +141,16 @@ jobs:
           go build -ldflags="-s -w" -trimpath -o $BINARY_NAME main.go
           echo "编译完成."
           
-          # 压缩编译好的文件
-          echo "开始压缩..."
-          upx -9 $BINARY_NAME
-          echo "压缩完成."
+          # 判断是否需要压缩（UPX 不支持 Windows ARM64、macOS ARM64 和 macOS AMD64）
+          if [ "${{ matrix.goos }}" == "windows" ] && [ "${{ matrix.goarch }}" == "arm64" ]; then
+            echo "跳过压缩: Windows ARM64 不支持 UPX"
+          elif [ "${{ matrix.goos }}" == "darwin" ]; then
+            echo "跳过压缩: macOS 不支持 UPX"
+          else
+            echo "开始压缩..."
+            upx -9 $BINARY_NAME
+            echo "压缩完成."
+          fi
 
           # 将文件名设置为步骤输出，方便后续步骤引用
           echo "binary_name=$BINARY_NAME" >> $GITHUB_OUTPUT
